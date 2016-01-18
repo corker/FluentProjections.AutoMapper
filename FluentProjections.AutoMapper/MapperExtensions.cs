@@ -1,4 +1,4 @@
-﻿using FluentProjections.EventHandlingStrategies.Arguments;
+﻿using FluentProjections.Strategies.Arguments;
 using AutoMapperMapper = AutoMapper.Mapper;
 
 namespace FluentProjections.AutoMapper

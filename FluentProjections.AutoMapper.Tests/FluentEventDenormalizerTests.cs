@@ -1,5 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
+using FluentProjections.Persistence;
 using NUnit.Framework;
 using AutoMapperMapper = AutoMapper.Mapper;
 
@@ -21,93 +23,106 @@ namespace FluentProjections.AutoMapper.Tests
             public long ValueInt64 { get; set; }
         }
 
-        private class TestStore : IFluentProjectionStore
+        private class TestPersistenceFactory : ICreateProjectionPersistence
         {
-            public TestStore(TestProjection readProjection)
+            private readonly IPersistProjections _persistence;
+
+            public TestPersistenceFactory(IPersistProjections persistence)
+            {
+                _persistence = persistence;
+            }
+
+            public async Task<IPersistProjections> Create()
+            {
+                return await Task.FromResult(_persistence);
+            }
+        }
+
+        private class TestPersistence : IPersistProjections
+        {
+            public TestPersistence(TestProjection readProjection)
             {
                 ReadProjection = readProjection;
             }
 
-            public IEnumerable<FluentProjectionFilterValue> ReadFilterValues { get; private set; }
+            public IEnumerable<FilterValue> ReadFilterValues { get; private set; }
             public TestProjection ReadProjection { get; }
             public TestProjection UpdateProjection { get; private set; }
             public List<TestProjection> InsertProjections { get; private set; }
-            public IEnumerable<FluentProjectionFilterValue> RemoveFilterValues { get; private set; }
+            public IEnumerable<FilterValue> RemoveFilterValues { get; private set; }
 
-            public IEnumerable<TProjection> Read<TProjection>(IEnumerable<FluentProjectionFilterValue> values)
+            public async Task<IEnumerable<TProjection>> Read<TProjection>(IEnumerable<FilterValue> values)
                 where TProjection : class
             {
                 ReadFilterValues = values;
-                return new[] {ReadProjection}.OfType<TProjection>();
+                return await Task.FromResult(new[] {ReadProjection}.OfType<TProjection>());
             }
 
-            public void Update<TProjection>(TProjection projection) where TProjection : class
+            public async Task Update<TProjection>(TProjection projection) where TProjection : class
             {
                 UpdateProjection = projection as TestProjection;
+                await Task.Yield();
             }
 
-            public void Insert<TProjection>(TProjection projection) where TProjection : class
+            public async Task Insert<TProjection>(TProjection projection) where TProjection : class
             {
                 InsertProjections = InsertProjections ?? new List<TestProjection>();
                 InsertProjections.Add(projection as TestProjection);
+                await Task.Yield();
             }
 
-            public void Remove<TProjection>(IEnumerable<FluentProjectionFilterValue> values) where TProjection : class
+            public async Task Remove<TProjection>(IEnumerable<FilterValue> values) where TProjection : class
             {
                 RemoveFilterValues = values;
+                await Task.Yield();
             }
         }
 
         [TestFixture]
         public class When_event_add_new_projection_and_auto_map_properties
         {
-            private class TestDenormalizer : FluentEventDenormalizer<TestProjection>
+            private class TestHandler : MessageHandler<TestProjection>
             {
-                private readonly IFluentProjectionStore _store;
-
-                static TestDenormalizer()
+                static TestHandler()
                 {
                     AutoMapperMapper.CreateMap<TestEvent, TestProjection>();
                 }
 
-                public TestDenormalizer(IFluentProjectionStore store)
+                public TestHandler(ICreateProjectionPersistence persistenceFactory) : base(persistenceFactory)
                 {
-                    _store = store;
-
-                    On<TestEvent>(x => x.AddNew().AutoMap());
                 }
 
-                public void Handle(TestEvent @event)
+                public async Task Handle(TestEvent @event)
                 {
-                    Handle(@event, _store);
+                    await Handle(@event, x => x.AddNew().AutoMap());
                 }
             }
 
-            private TestStore _targetStore;
+            private TestPersistence _targetPersistence;
 
-            [TestFixtureSetUp]
+            [OneTimeSetUp]
             public void Init()
             {
-                _targetStore = new TestStore(null);
-
                 var @event = new TestEvent
                 {
                     ValueInt32 = 777
                 };
 
-                new TestDenormalizer(_targetStore).Handle(@event);
+                _targetPersistence = new TestPersistence(null);
+                var projectionPersistence = new TestPersistenceFactory(_targetPersistence);
+                new TestHandler(projectionPersistence).Handle(@event).Wait();
             }
 
             [Test]
             public void Should_add_new_projection()
             {
-                Assert.AreEqual(1, _targetStore.InsertProjections.Count);
+                Assert.AreEqual(1, _targetPersistence.InsertProjections.Count);
             }
 
             [Test]
             public void Should_map_values()
             {
-                Assert.AreEqual(777, _targetStore.InsertProjections.Single().ValueInt32);
+                Assert.AreEqual(777, _targetPersistence.InsertProjections.Single().ValueInt32);
             }
         }
     }
