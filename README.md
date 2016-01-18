@@ -1,0 +1,1 @@
+# FluentProjections.AutoMapper
